@@ -163,9 +163,13 @@ void sleep(sysargs *args)
     int status = sleep_real(seconds);
 
     if(status == 1)
+    {
         args->arg4 = (void *) -1;
+    }
     else
+    {
         args->arg4 = (void *) 0;
+    }
 
     setUserMode();
 
@@ -206,13 +210,12 @@ int sleep_real(int sec)
     {
         proc_ptr curr = Waiting;
         proc_ptr last = NULL;
-
-        while(curr != NULL && curr->wake_time < wake_time)
+        //while(curr != NULL && curr->wake_time < wake_time)
+        while(curr != NULL)
         {
             last = curr;
             curr = curr->wake_up;
         }
-
         last->wake_up = &(ProcTable4[pid]);
         ProcTable4[pid].wake_up = curr;
     }
@@ -355,11 +358,6 @@ DiskDriver(char *arg)
 
    disk_sem[unit] = semcreate_real(0);
    diskQ_sem[unit] = semcreate_real(1);
-
-   for(int i = 0; i < DISK_INT; i++)
-   {
-       num_tracks[i] = 0;
-   }
 
    driver_proc_ptr current_req;
 
