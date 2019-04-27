@@ -21,6 +21,7 @@ int terminateDisk;
 static struct driver_proc Driver_Table[MAXPROC];
 static int diskpids[DISK_UNITS];
 proc_struct ProcTable4[MAXPROC];
+proc_ptr Waiting;
 int disk_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
 
@@ -177,6 +178,33 @@ int sleep_real(int sec)
 
     ProcTable4[pid].wake_time = wake_time;
 
+    if(Waiting == NULL || Waiting->wake_up > wake_time)
+    {
+        if(Waiting == NULL)
+        {
+            Waiting = &(ProcTable4[pid]);
+        }
+        else
+        {
+            ProcTable4[pid].wake_up = Waiting;
+            Waiting = &(ProcTable4[pid]);
+        }
+    }
+    else
+    {
+        proc_ptr curr = Waiting;
+        proc_ptr last = NULL;
+
+        while(curr != NULL && curr->wake_time < wake_time)
+        {
+            last = curr;
+            curr = curr->wake_up;
+        }
+
+        last->wake_up = &(ProcTable4[pid]);
+        ProcTable4[pid].wake_up = curr;
+    }
+
     semp_real(ProcTable4[pid].sleep_sem);
     return 0;
 } /* sleep_real */
@@ -255,6 +283,12 @@ ClockDriver(char *arg)
          * Compute the current time and wake up any processes
          * whose time has come.
          */
+         semv_real(Waiting->sleep_sem);
+
+         proc_ptr temp = Waiting->wake_up;
+         Waiting->wake_up = NULL;
+         Waiting->wake_time = -1;
+         Waiting = temp;
     }
     return 1;
 }
