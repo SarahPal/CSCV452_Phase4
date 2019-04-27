@@ -1,5 +1,13 @@
 #define DEBUG4 1
 
+#define CHECKMODE {						\
+	if (psr_get() & PSR_CURRENT_MODE) { 				\
+	    console("Trying to invoke syscall from kernel\n");	\
+	    halt(1);						\
+	}							\
+}
+
+
 typedef struct driver_proc driver_proc;
 typedef struct driver_proc * driver_proc_ptr;
 typedef struct proc_struct proc_struct;
@@ -24,18 +32,11 @@ struct driver_proc {
 };
 
 struct proc_struct {
-   short          pid;               /* process id */
-   short          ppid;
-   char           name[MAXNAME];
-   char           startArg[MAXARG];
-   int            priority;
-   int (* start_func) (char *);
-   int            stack_size;
-   int            spawnBox;
-   int            num_children;
-   proc_ptr       next;
-   proc_ptr       childProcPtr;
-   proc_ptr       nextSiblingPtr;
+   int      wake_time;
+   int      sleep_sem;
+   int      term_sem;
+   int      disk_sem;
+   proc_ptr  wake_up;
    /* other fields as needed... */
 };
 
@@ -51,4 +52,3 @@ union psr_values {
    struct psr_bits bits;
    unsigned int integer_part;
 };
-
