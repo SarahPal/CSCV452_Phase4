@@ -16,7 +16,8 @@
 #define debugflag4 0
 
 static int running; /*semaphore to synchronize drivers and start3*/
-int terminateDisk;
+int terminate_disk;
+int terminate_clock;
 
 static struct driver_proc Driver_Table[MAXPROC];
 static int diskpids[DISK_UNITS];
@@ -59,12 +60,14 @@ start3(char *arg)
     int		status;
 
 
-    int terminateDisk = 1;
+    int terminate_disk = 1;
+    int terminate_clock = 1;
     /*
      * Check kernel mode here.
 
      */
      check_kernel_mode("start3");
+
     /* Assignment system call handlers */
     sys_vec[SYS_SLEEP]     = sleep;
     sys_vec[SYS_DISKREAD]  = disk_read;
@@ -133,7 +136,7 @@ start3(char *arg)
     pid = spawn_real("start4", start4, NULL,  8 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
-    //terminateDisk = 0;
+    terminate_clock = 0;
     /*
      * Zap the device drivers
      */
@@ -274,7 +277,7 @@ ClockDriver(char *arg)
      */
     semv_real(running);
     psr_set(psr_get() | PSR_CURRENT_INT);
-    while(! is_zapped()) {
+    while(!is_zapped()) {
         result = waitdevice(CLOCK_DEV, 0, &status);
         if (result != 0) {
             return 0;
@@ -283,14 +286,17 @@ ClockDriver(char *arg)
          * Compute the current time and wake up any processes
          * whose time has come.
          */
-         semv_real(Waiting->sleep_sem);
+         while(Waiting != NULL && Waiting->wake_time < sys_clock())
+         {
+             semv_real(Waiting->sleep_sem);
+              proc_ptr temp = Waiting->wake_up;
+              Waiting->wake_up = NULL;
+              Waiting->wake_time = -1;
+              Waiting = temp;
 
-         proc_ptr temp = Waiting->wake_up;
-         Waiting->wake_up = NULL;
-         Waiting->wake_time = -1;
-         Waiting = temp;
+         }
     }
-    return 1;
+    return 0;
 }
 
 static int
@@ -347,11 +353,10 @@ DiskDriver(char *arg)
    {
        semp_real(disk_sem[unit]);
 
-       if(terminateDisk == 0)
+       if(terminate_disk == 0)
        {
            break;
        }
-       semp_real(diskQ_sem[unit]);
    }
    return 0;
 }
