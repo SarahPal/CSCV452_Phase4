@@ -143,7 +143,15 @@ start3(char *arg)
     zap(clockPID);  // clock driver
     join(&status); /* for the Clock Driver */
 
-    return 1;
+    terminate_disk = 0;
+    for(int i = 0; i < DISK_UNITS; i++)
+    {
+        semv_real(disk_sem[i]);
+        zap(diskpids[i]);
+        join(&status);
+    }
+
+    quit(0);
 }
 
 void sleep(sysargs *args)
