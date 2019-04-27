@@ -25,6 +25,7 @@ proc_struct ProcTable4[MAXPROC];
 proc_ptr Waiting;
 int disk_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
+int num_tracks[DISK_UNITS];
 
 /* -------------------------------PROTOTYPES----------------------------------*/
 
@@ -244,13 +245,50 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
 
 void disk_size(sysargs *args)
 {
+    if(DEBUG4 && debugflag4)
+        console("    - disk_size(): Entering the disk_size function...\n");
 
+    int unit = args->arg1;
+    int sector, track, disk;
+
+    int status = disk_size_real(unit, &sector, &track, &disk);
+
+    if(status == -1)
+    {
+        if(DEBUG4 && debugflag4)
+            console("        - disk_size(): bad status. returning...\n");
+        args->arg4 = (void *) -1;
+        return;
+    }
+
+    args->arg1 = (void *) sector;
+    args->arg2 = (void *) track;
+    args->arg3 = (void *) disk;
+    args->arg4 = (void *) status;
+
+    setUserMode();
 } /* disk_size */
 
 int disk_size_real(int unit, int *sector, int *track, int *disk)
 {
+    if(DEBUG4 && debugflag4)
+        console("    - disk_size_real(): Entering the disk_size_real function...\n");
 
-    return 1;
+    check_kernel_mode("disk_size_real");
+
+    if(unit < 0 || unit > DISK_UNITS)
+    {
+        if(DEBUG4 && debugflag4)
+            console("       - disk_size_real(): Invalid unit number. Returning...\n");
+        return -1;
+    }
+
+    *sector = DISK_SECTOR_SIZE;
+    *track = DISK_TRACK_SIZE;
+    *disk = num_tracks[unit];
+
+    return 0;
+
 } /* disk_size_real */
 
 void term_read(sysargs *args)
@@ -314,7 +352,6 @@ DiskDriver(char *arg)
    device_request my_request;
    int result;
    int status;
-   int *num_tracks[DISK_INT];
 
    disk_sem[unit] = semcreate_real(0);
    diskQ_sem[unit] = semcreate_real(1);
