@@ -20,7 +20,7 @@ int terminateDisk;
 
 static struct driver_proc Driver_Table[MAXPROC];
 static int diskpids[DISK_UNITS];
-proc_struct ProcTable[MAXPROC];
+proc_struct ProcTable4[MAXPROC];
 int disk_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
 
@@ -76,6 +76,15 @@ start3(char *arg)
 
     /* Initialize the phase 4 process table */
 
+    for(int i = 0; i < MAXPROC; i++)
+    {
+        ProcTable4[i].wake_time = -1;
+        ProcTable4[i].sleep_sem = semcreate_real(0);
+        ProcTable4[i].term_sem = semcreate_real(0);
+        ProcTable4[i].disk_sem = semcreate_real(0);
+        ProcTable4[i].wake_up = NULL;
+    }
+
 
     /*
      * Create clock device driver
@@ -100,7 +109,7 @@ start3(char *arg)
      * the stack size depending on the complexity of your
      * driver, and perhaps do something with the pid returned.
      */
-     char buf[10];
+    char buf[10];
     for (i = 0; i < DISK_UNITS; i++) {
         sprintf(buf, "%d", i);
         sprintf(name, "DiskDriver%d", i);
@@ -111,8 +120,7 @@ start3(char *arg)
         }
     }
     semp_real(running);
-    semp_real(running); //needed?
-
+    semp_real(running);
 
     /*
      * Create first user-level process and wait for it to finish.
@@ -124,7 +132,7 @@ start3(char *arg)
     pid = spawn_real("start4", start4, NULL,  8 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
-    terminateDisk = 0;
+    //terminateDisk = 0;
     /*
      * Zap the device drivers
      */
@@ -138,7 +146,7 @@ void sleep(sysargs *args)
 {
     if(DEBUG4 && debugflag4)
         console("    - sleep(): Entering the sleep function\n");
-    int seconds = args->arg1;
+    int seconds = (int)args->arg1;
     int status = sleep_real(seconds);
 
     if(status == 1)
@@ -165,11 +173,11 @@ int sleep_real(int sec)
     }
 
     int pid = getpid()%MAXPROC;
-    long wake_time = sys_clock() + (sec * 1000000);
+    int wake_time = sys_clock() + (sec * 1000000);
 
-    ProcTable[pid].wake_time = wake_time;
+    ProcTable4[pid].wake_time = wake_time;
 
-    semp_real(ProcTable[pid].sleep_sem);
+    semp_real(ProcTable4[pid].sleep_sem);
     return 0;
 } /* sleep_real */
 
@@ -280,8 +288,7 @@ DiskDriver(char *arg)
 
    result = device_output(DISK_DEV, unit, &my_request);
    if(DEBUG4 && debugflag4)
-        console("        - DiskDriver(): number of tracks in unit %d: %d", unit, num_tracks);
-   console("I got here\n");
+        console("        - DiskDriver(): number of tracks in unit %d: %d\n", unit, num_tracks);
 
    if (result != DEV_OK) {
       console("        - DiskDriver %d: did not get DEV_OK on DISK_TRACKS call\n", unit);
@@ -312,9 +319,7 @@ DiskDriver(char *arg)
        }
        semp_real(diskQ_sem[unit]);
    }
-
-   //more code
-    return 0;
+   return 0;
 }
 
 /*----------------------------------------------------------------*
@@ -328,7 +333,7 @@ static void check_kernel_mode(char *caller_name)
 {
     union psr_values caller_psr;                                        /* holds the current psr values */
     if (DEBUG4 && debugflag4)
-       console("    - check_kernel_mode(): called for function %s -\n", caller_name);
+       console("    - check_kernel_mode(): called for function %s\n", caller_name);
 
  /* checks if in kernel mode, halts otherwise */
     caller_psr.integer_part = psr_get();                               /* stores current psr values into structure */
