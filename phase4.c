@@ -13,7 +13,7 @@
 
 /* --------------------------------GLOBALS------------------------------------*/
 
-#define debugflag4 1
+#define debugflag4 0
 
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
@@ -52,6 +52,7 @@ void term_write(sysargs *args);
 int term_write_real(int unit, int size, char *text);
 
 void disk_req(driver_proc request, int unit);
+void disk_req_II(driver_proc_ptr request, int unit);
 
 static void check_kernel_mode(char *caller_name);
 void setUserMode();
@@ -155,9 +156,9 @@ start3(char *arg)
     for(int i = 0; i < DISK_UNITS; i++)
     {
         semv_real(disk_sem[i]);
-        console("%d\n", diskpids[i]);
-        zap(diskpids[i]);  //error on this line...
-        console("\nOr This one?\n");
+        //console("%d\n", diskpids[i]);
+        zap(diskpids[i]);
+        //console("\nOr This one?\n");
         join(&status);
     }
 
@@ -497,6 +498,11 @@ void disk_req(driver_proc request, int unit)
 
 }
 
+void disk_req_II(driver_proc_ptr request, int unit)
+{
+    return;
+}
+
 static int
 ClockDriver(char *arg)
 {
@@ -537,11 +543,13 @@ DiskDriver(char *arg)
    device_request my_request;
    int result;
    int status;
+   int *tracks;
 
    disk_sem[unit] = semcreate_real(0);
    diskQ_sem[unit] = semcreate_real(1);
    Disk_QueueT[unit] = NULL;
    Disk_QueueB[unit] = NULL;
+   arm_loc[unit] = 0;
 
    driver_proc_ptr current_req;
 
@@ -573,17 +581,37 @@ DiskDriver(char *arg)
           console("        - DiskDriver(%d): waitdevice returned a non-zero value. Returning...\n");
        return 0;
    }
-
+   num_tracks[unit] = tracks;
    semv_real(running);
 
    while(!is_zapped())
    {
        semp_real(disk_sem[unit]);
 
-       if(terminate_disk == 0)
+       semp_real(diskQ_sem[unit]);
+
+       if(Disk_QueueT[unit] == NULL)
        {
-           break;
+           Disk_QueueT[unit] = Disk_QueueB[unit];
+           Disk_QueueB[unit] = NULL;
        }
+
+       driver_proc_ptr request = Disk_QueueT[unit];
+
+       if(Disk_QueueT[unit]->next == NULL)
+       {
+           Disk_QueueT[unit] = NULL;
+       }
+       else
+       {
+           Disk_QueueT[unit] = Disk_QueueT[unit]->next;
+       }
+
+       disk_req_II(request, unit);
+
+       semv_real(diskQ_sem[unit]);
+
+       semv_real(ProcTable4[request->pid].disk_sem);
    }
    return 0;
 }
