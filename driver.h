@@ -27,6 +27,8 @@ struct driver_proc {
    int   num_sectors;
    void *disk_buf;
 
+   driver_proc_ptr next;
+
    //more fields to add
 
 };
