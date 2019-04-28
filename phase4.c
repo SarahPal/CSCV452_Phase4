@@ -13,19 +13,24 @@
 
 /* --------------------------------GLOBALS------------------------------------*/
 
-#define debugflag4 0
+#define debugflag4 1
 
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
 int terminate_clock;
 
 static struct driver_proc Driver_Table[MAXPROC];
-static int diskpids[DISK_UNITS];
+driver_proc_ptr Disk_QueueT[DISK_UNITS];
+driver_proc_ptr Disk_QueueB[DISK_UNITS];
+
 proc_struct ProcTable4[MAXPROC];
 proc_ptr Waiting;
+
+static int diskpids[DISK_UNITS];
 int disk_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
 int num_tracks[DISK_UNITS];
+int arm_loc[DISK_UNITS];
 
 /* -------------------------------PROTOTYPES----------------------------------*/
 
@@ -45,6 +50,8 @@ void term_read(sysargs *args);
 int term_read_real(int unit, int size, char *buffer);
 void term_write(sysargs *args);
 int term_write_real(int unit, int size, char *text);
+
+void disk_req(driver_proc request, int unit);
 
 static void check_kernel_mode(char *caller_name);
 void setUserMode();
@@ -114,11 +121,11 @@ start3(char *arg)
      * the stack size depending on the complexity of your
      * driver, and perhaps do something with the pid returned.
      */
-    char buf[10];
+
     for (i = 0; i < DISK_UNITS; i++) {
-        sprintf(buf, "%d", i);
+        sprintf(termbuf, "%d", i);
         sprintf(name, "DiskDriver%d", i);
-        diskpids[i] = fork1(name, DiskDriver, buf, USLOSS_MIN_STACK, 2);
+        diskpids[i] = fork1(name, DiskDriver, termbuf, USLOSS_MIN_STACK, 2);
         if (diskpids[i] < 0) {
            console("start3(): Can't create disk driver %d\n", i);
            halt(1);
@@ -148,11 +155,14 @@ start3(char *arg)
     for(int i = 0; i < DISK_UNITS; i++)
     {
         semv_real(disk_sem[i]);
-        zap(diskpids[i]);
+        console("%d\n", diskpids[i]);
+        zap(diskpids[i]);  //error on this line...
+        console("\nOr This one?\n");
         join(&status);
     }
 
     quit(0);
+    return 0;
 }
 
 void sleep(sysargs *args)
@@ -226,24 +236,112 @@ int sleep_real(int sec)
 
 void disk_read(sysargs *args)
 {
+    int unit = args->arg5;
+    int track = args->arg3;
+    int first = args->arg4;
+    int sectors = args->arg2;
+    void *buffer = args->arg1;
+
+    int status = disk_read_real(unit, track, first, sectors, buffer);
+
+    if(status == -1)
+    {
+        if(DEBUG4 && debugflag4)
+            console("        - disk_read(): invalid status returned. Returning...\n");
+        args->arg4 = (void *) -1;
+        return;
+    }
+
+    args->arg1 = (void *) status;
+    args->arg4 = (void *) 0;
+
+    setUserMode();
 
 } /* disk_read */
 
 int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
 {
-    return 1;
+    if(DEBUG4 && debugflag4)
+        console("    - disk_read_real(): Entering the disk_read_real function...\n");
+    if(unit > DISK_UNITS || track >= num_tracks[unit] || first >= DISK_TRACK_SIZE)
+    {
+        if(DEBUG4 && debugflag4)
+            console("        - disk_read_real(): invalid arguments. Returning...\n");
+        return -1;
+    }
+
+    check_kernel_mode("disk_read_real");
+
+
+
+    driver_proc request;
+    request.track_start = track;
+    request.sector_start = first;
+    request.num_sectors = sectors;
+    request.disk_buf = buffer;
+    request.operation = DISK_READ;
+    request.next = NULL;
+
+    disk_req(request, unit);
+    semp_real(ProcTable4[getpid()%MAXPROC].disk_sem);
+
+    return 0;
 
 } /* disk_read_real */
 
 void disk_write(sysargs *args)
 {
+    int unit = args->arg5;
+    int track = args->arg3;
+    int first = args->arg4;
+    int sectors = args->arg2;
+    void *buffer = args->arg1;
 
+    int status = disk_write_real(unit, track, first, sectors, buffer);
+
+    if(status == -1)
+    {
+        if(DEBUG4 && debugflag4)
+            console("        - disk_read(): invalid status returned. Returning...\n");
+        args->arg4 = (void *) -1;
+        return;
+    }
+
+    args->arg1 = (void *) status;
+    args->arg4 = (void *) 0;
+
+    setUserMode();
 } /* disk_write */
 
 int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
 {
-    return 1;
+    if(DEBUG4 && debugflag4)
+        console("    - disk_write_real(): Entering the disk_write_real function...\n");
+    if(unit > DISK_UNITS || track >= num_tracks[unit] || first >= DISK_TRACK_SIZE)
+    {
+        if(DEBUG4 && debugflag4)
+            console("        - disk_write_real(): invalid arguments. Returning...\n");
+        return -1;
+    }
 
+    check_kernel_mode("disk_write_real");
+
+    driver_proc request;
+    request.track_start = track;
+    request.sector_start = first;
+    request.num_sectors = sectors;
+    request.disk_buf = buffer;
+    request.operation = DISK_WRITE;
+    request.next = NULL;
+
+    disk_req(request, unit);
+
+    if(DEBUG4 && debugflag4)
+        console("        - disk_write_real(): returned from disk_req\n");
+
+    semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
+
+    return 0;
 } /* disk_write_real */
 
 void disk_size(sysargs *args)
@@ -251,7 +349,7 @@ void disk_size(sysargs *args)
     if(DEBUG4 && debugflag4)
         console("    - disk_size(): Entering the disk_size function...\n");
 
-    int unit = args->arg1;
+    int unit = (int)args->arg1;
     int sector, track, disk;
 
     int status = disk_size_real(unit, &sector, &track, &disk);
@@ -315,6 +413,90 @@ int term_write_real(int unit, int size, char *buffer)
 
 } /* term_write_real */
 
+void disk_req(driver_proc request, int unit)
+{
+    if(DEBUG4 && debugflag4)
+        console("    - disk_req(): Entering the disk_req function...\n");
+    semp_real(diskQ_sem[unit]);
+
+    if(request.track_start > arm_loc[unit])
+    {
+        if(Disk_QueueT[unit] == NULL)
+        {
+            console("Disk Queue is empty. Saving to top\n");
+            Disk_QueueT[unit] = &(request);
+            Disk_QueueT[unit]->next = NULL;
+        }
+        else
+        {
+            console("Disk Queue is not empty\n");
+            driver_proc_ptr curr = Disk_QueueT[unit];
+            driver_proc_ptr last = NULL;
+
+            while(curr != NULL && curr->track_start < request.track_start)
+            {
+                last = curr;
+                curr = curr->next;
+            }
+            while(curr != NULL && curr->sector_start < request.sector_start)
+            {
+                last = curr;
+                curr = curr->next;
+            }
+            if(last == NULL)
+            {
+                request.next = Disk_QueueT[unit];
+                Disk_QueueT[unit] = &request;
+            }
+            else
+            {
+                last->next = &request;
+                request.next = curr;
+            }
+        }
+    }
+    else
+    {
+        if(Disk_QueueB[unit] == NULL)
+        {
+            console("Disk Queue is empty. Saving to bottom\n");
+            Disk_QueueB[unit] = &(request);
+        }
+        else
+        {
+            driver_proc_ptr curr = Disk_QueueB[unit];
+            driver_proc_ptr last = NULL;
+
+            while(curr != NULL && curr->track_start < request.track_start)
+            {
+                last = curr;
+                curr = curr->next;
+            }
+            while(curr != NULL && curr->sector_start < request.sector_start)
+            {
+                last = curr;
+                curr = curr->next;
+            }
+            if(last == NULL)
+            {
+                request.next = Disk_QueueT[unit];
+                Disk_QueueT[unit] = &request;
+            }
+            else
+            {
+                last->next = &request;
+                request.next = curr;
+            }
+        }
+    }
+    semv_real(diskQ_sem[unit]);
+    semv_real(disk_sem[unit]);
+
+    if(DEBUG4 && debugflag4)
+        console("        - disk_req(): Disk request added to Disk Queue.\n");
+
+}
+
 static int
 ClockDriver(char *arg)
 {
@@ -358,6 +540,8 @@ DiskDriver(char *arg)
 
    disk_sem[unit] = semcreate_real(0);
    diskQ_sem[unit] = semcreate_real(1);
+   Disk_QueueT[unit] = NULL;
+   Disk_QueueB[unit] = NULL;
 
    driver_proc_ptr current_req;
 
