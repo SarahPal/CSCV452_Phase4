@@ -31,7 +31,7 @@ static int diskpids[DISK_UNITS];
 int disk_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
 int disk_requests[DISK_UNITS];
-int num_tracks[DISK_UNITS];
+unsigned int num_tracks[DISK_UNITS];
 int arm_loc[DISK_UNITS];
 
 /* -------------------------------PROTOTYPES----------------------------------*/
@@ -85,8 +85,8 @@ start3(char *arg)
     sys_vec[SYS_DISKREAD]  = disk_read;
     sys_vec[SYS_DISKWRITE] = disk_write;
     sys_vec[SYS_DISKSIZE]  = disk_size;
-    sys_vec[SYS_TERMREAD]  = term_read;
-    sys_vec[SYS_TERMWRITE] = term_write;
+    //sys_vec[SYS_TERMREAD]  = term_read;
+    //sys_vec[SYS_TERMWRITE] = term_write;
     //more for this phase's system call handlings
 
 
@@ -205,7 +205,7 @@ int sleep_real(int sec)
 
     ProcTable4[pid].wake_time = wake_time;
 
-    if(Waiting == NULL || Waiting->wake_up > wake_time)
+    if(Waiting == NULL || Waiting->wake_time > wake_time)
     {
         if(Waiting == NULL)
         {
@@ -217,15 +217,18 @@ int sleep_real(int sec)
             Waiting = &(ProcTable4[pid]);
         }
     }
-    else
+    else        /* Can we actually get here? */
     {
         proc_ptr curr = Waiting;
         proc_ptr last = NULL;
         //while(curr != NULL && curr->wake_time < wake_time)
         while(curr != NULL)
         {
-            last = curr;
-            curr = curr->wake_up;
+            if (curr->wake_time < wake_time)
+            {
+                last = curr;
+                curr = curr->wake_up;
+            }
         }
         last->wake_up = &(ProcTable4[pid]);
         ProcTable4[pid].wake_up = curr;
