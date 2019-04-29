@@ -13,7 +13,7 @@
 
 /* --------------------------------GLOBALS------------------------------------*/
 
-#define debugflag4 0
+#define debugflag4 1
 
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
@@ -52,7 +52,6 @@ void term_write(sysargs *args);
 int term_write_real(int unit, int size, char *text);
 
 void disk_req(driver_proc request, int unit);
-void disk_req_II(driver_proc_ptr request, int unit);
 
 static void check_kernel_mode(char *caller_name);
 void setUserMode();
@@ -205,7 +204,7 @@ int sleep_real(int sec)
 
     ProcTable4[pid].wake_time = wake_time;
 
-    if(Waiting == NULL || Waiting->wake_up > wake_time)
+    /*if(Waiting == NULL || Waiting->wake_up > wake_time)
     {
         if(Waiting == NULL)
         {
@@ -229,7 +228,7 @@ int sleep_real(int sec)
         }
         last->wake_up = &(ProcTable4[pid]);
         ProcTable4[pid].wake_up = curr;
-    }
+    } */
 
     semp_real(ProcTable4[pid].sleep_sem);
     return 0;
@@ -282,6 +281,7 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
     request.disk_buf = buffer;
     request.operation = DISK_READ;
     request.next = NULL;
+    request.pid = getpid();
 
     disk_req(request, unit);
     semp_real(ProcTable4[getpid()%MAXPROC].disk_sem);
@@ -334,6 +334,7 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
     request.disk_buf = buffer;
     request.operation = DISK_WRITE;
     request.next = NULL;
+    request.pid = getpid();
 
     disk_req(request, unit);
 
@@ -498,11 +499,6 @@ void disk_req(driver_proc request, int unit)
 
 }
 
-void disk_req_II(driver_proc_ptr request, int unit)
-{
-    return;
-}
-
 static int
 ClockDriver(char *arg)
 {
@@ -543,7 +539,6 @@ DiskDriver(char *arg)
    device_request my_request;
    int result;
    int status;
-   int *tracks;
 
    disk_sem[unit] = semcreate_real(0);
    diskQ_sem[unit] = semcreate_real(1);
@@ -581,16 +576,19 @@ DiskDriver(char *arg)
           console("        - DiskDriver(%d): waitdevice returned a non-zero value. Returning...\n");
        return 0;
    }
-   num_tracks[unit] = tracks;
    semv_real(running);
 
    while(!is_zapped())
    {
        semp_real(disk_sem[unit]);
-
        semp_real(diskQ_sem[unit]);
 
-       if(Disk_QueueT[unit] == NULL)
+       if(terminate_disk == 0)
+       {
+           break;
+       }
+
+      if(Disk_QueueT[unit] == NULL)
        {
            Disk_QueueT[unit] = Disk_QueueB[unit];
            Disk_QueueB[unit] = NULL;
@@ -607,10 +605,7 @@ DiskDriver(char *arg)
            Disk_QueueT[unit] = Disk_QueueT[unit]->next;
        }
 
-       disk_req_II(request, unit);
-
        semv_real(diskQ_sem[unit]);
-
        semv_real(ProcTable4[request->pid].disk_sem);
    }
    return 0;
