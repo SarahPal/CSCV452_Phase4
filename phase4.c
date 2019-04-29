@@ -204,7 +204,7 @@ int sleep_real(int sec)
 
     ProcTable4[pid].wake_time = wake_time;
 
-    /*if(Waiting == NULL || Waiting->wake_up > wake_time)
+    if(Waiting == NULL || Waiting->wake_up > wake_time)
     {
         if(Waiting == NULL)
         {
@@ -228,7 +228,7 @@ int sleep_real(int sec)
         }
         last->wake_up = &(ProcTable4[pid]);
         ProcTable4[pid].wake_up = curr;
-    } */
+    }
 
     semp_real(ProcTable4[pid].sleep_sem);
     return 0;
