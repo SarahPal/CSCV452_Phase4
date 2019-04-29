@@ -236,11 +236,11 @@ int sleep_real(int sec)
 
 void disk_read(sysargs *args)
 {
-    int unit = args->arg5;
-    int track = args->arg3;
-    int first = args->arg4;
-    int sectors = args->arg2;
-    void *buffer = args->arg1;
+    int unit = (int)args->arg5;
+    int track = (int)args->arg3;
+    int first = (int)args->arg4;
+    int sectors = (int)args->arg2;
+    void *buffer = (void *)args->arg1;
 
     int status = disk_read_real(unit, track, first, sectors, buffer);
 
@@ -272,8 +272,6 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
 
     check_kernel_mode("disk_read_real");
 
-
-
     driver_proc request;
     request.track_start = track;
     request.sector_start = first;
@@ -292,11 +290,11 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
 
 void disk_write(sysargs *args)
 {
-    int unit = args->arg5;
-    int track = args->arg3;
-    int first = args->arg4;
-    int sectors = args->arg2;
-    void *buffer = args->arg1;
+    int unit = (int)args->arg5;
+    int track = (int)args->arg3;
+    int first = (int)args->arg4;
+    int sectors = (int)args->arg2;
+    void *buffer = (void *)args->arg1;
 
     int status = disk_write_real(unit, track, first, sectors, buffer);
 
@@ -342,7 +340,6 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
         console("        - disk_write_real(): returned from disk_req\n");
 
     semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
-
     return 0;
 } /* disk_write_real */
 
@@ -419,6 +416,7 @@ void disk_req(driver_proc request, int unit)
 {
     if(DEBUG4 && debugflag4)
         console("    - disk_req(): Entering the disk_req function...\n");
+
     semp_real(diskQ_sem[unit]);
 
     if(request.track_start > arm_loc[unit])
@@ -459,6 +457,7 @@ void disk_req(driver_proc request, int unit)
     }
     else
     {
+        console("here\n");
         if(Disk_QueueB[unit] == NULL)
         {
             console("Disk Queue is empty. Saving to bottom\n");
@@ -493,6 +492,7 @@ void disk_req(driver_proc request, int unit)
     }
     semv_real(diskQ_sem[unit]);
     semv_real(disk_sem[unit]);
+    semv_real(ProcTable4[request.pid].disk_sem);
 
     if(DEBUG4 && debugflag4)
         console("        - disk_req(): Disk request added to Disk Queue.\n");
@@ -581,12 +581,13 @@ DiskDriver(char *arg)
    while(!is_zapped())
    {
        semp_real(disk_sem[unit]);
-       semp_real(diskQ_sem[unit]);
-
        if(terminate_disk == 0)
        {
            break;
        }
+
+       semp_real(diskQ_sem[unit]);
+
 
       if(Disk_QueueT[unit] == NULL)
        {
