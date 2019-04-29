@@ -1,7 +1,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <strings.h>
+#include <string.h>
 #include <usloss.h>
 #include <phase1.h>
 #include <phase2.h>
@@ -13,11 +13,12 @@
 
 /* --------------------------------GLOBALS------------------------------------*/
 
-#define debugflag4 1
+#define debugflag4 0
 
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
 int terminate_clock;
+int count;
 
 static struct driver_proc Driver_Table[MAXPROC];
 driver_proc_ptr Disk_QueueT[DISK_UNITS];
@@ -29,6 +30,7 @@ proc_ptr Waiting;
 static int diskpids[DISK_UNITS];
 int disk_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
+int disk_requests[DISK_UNITS];
 int num_tracks[DISK_UNITS];
 int arm_loc[DISK_UNITS];
 
@@ -52,6 +54,8 @@ void term_write(sysargs *args);
 int term_write_real(int unit, int size, char *text);
 
 void disk_req(driver_proc request, int unit);
+void disk_reqII(driver_proc_ptr request, int unit);
+void disk_seek(int unit, int first);
 
 static void check_kernel_mode(char *caller_name);
 void setUserMode();
@@ -155,9 +159,6 @@ start3(char *arg)
     for(int i = 0; i < DISK_UNITS; i++)
     {
         semv_real(disk_sem[i]);
-        //console("%d\n", diskpids[i]);
-        zap(diskpids[i]);
-        //console("\nOr This one?\n");
         join(&status);
     }
 
@@ -240,9 +241,9 @@ void disk_read(sysargs *args)
     int track = (int)args->arg3;
     int first = (int)args->arg4;
     int sectors = (int)args->arg2;
-    void *buffer = (void *)args->arg1;
+    void *buffer = args->arg1;
 
-    int status = disk_read_real(unit, track, first, sectors, buffer);
+    long status = disk_read_real(unit, track, first, sectors, buffer);
 
     if(status == -1)
     {
@@ -252,7 +253,7 @@ void disk_read(sysargs *args)
         return;
     }
 
-    args->arg1 = (void *) status;
+    args->arg1 = (int)status;
     args->arg4 = (void *) 0;
 
     setUserMode();
@@ -282,7 +283,12 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
     request.pid = getpid();
 
     disk_req(request, unit);
+
+    semv_real(ProcTable4[diskpids[unit]].disk_sem);
     semp_real(ProcTable4[getpid()%MAXPROC].disk_sem);
+
+    int status;
+    device_input(DISK_DEV, unit, &status);
 
     return 0;
 
@@ -294,7 +300,7 @@ void disk_write(sysargs *args)
     int track = (int)args->arg3;
     int first = (int)args->arg4;
     int sectors = (int)args->arg2;
-    void *buffer = (void *)args->arg1;
+    void *buffer = args->arg1;
 
     int status = disk_write_real(unit, track, first, sectors, buffer);
 
@@ -338,7 +344,7 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
 
     if(DEBUG4 && debugflag4)
         console("        - disk_write_real(): returned from disk_req\n");
-
+    semv_real(ProcTable4[diskpids[unit]].disk_sem);
     semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     return 0;
 } /* disk_write_real */
@@ -391,45 +397,29 @@ int disk_size_real(int unit, int *sector, int *track, int *disk)
 
 } /* disk_size_real */
 
-void term_read(sysargs *args)
-{
-
-} /* term_read */
-
-int term_read_real(int unit, int size, char *buffer)
-{
-    return 1;
-} /* term_read_real */
-
-void term_write(sysargs *args)
-{
-
-} /* term_write */
-
-int term_write_real(int unit, int size, char *buffer)
-{
-    return 1;
-
-} /* term_write_real */
-
 void disk_req(driver_proc request, int unit)
 {
+    count++;
     if(DEBUG4 && debugflag4)
         console("    - disk_req(): Entering the disk_req function...\n");
 
+
     semp_real(diskQ_sem[unit]);
 
-    if(request.track_start > arm_loc[unit])
+
+    if(request.track_start > arm_loc[unit] && count <= 2)
     {
         if(Disk_QueueT[unit] == NULL)
         {
-            console("Disk Queue is empty. Saving to top\n");
+            if(DEBUG4 && debugflag4)
+                //console("        - disk_req(): Disk Queue is empty. Saving to top\n");
             Disk_QueueT[unit] = &(request);
-            Disk_QueueT[unit]->next = NULL;
         }
         else
         {
-            console("Disk Queue is not empty\n");
+            //console("message2: %s\n", Disk_QueueT[unit]->disk_buf);
+            if(DEBUG4 && debugflag4)
+                console("        - disk_req(): Disk Queue is not empty\n");
             driver_proc_ptr curr = Disk_QueueT[unit];
             driver_proc_ptr last = NULL;
 
@@ -457,10 +447,10 @@ void disk_req(driver_proc request, int unit)
     }
     else
     {
-        console("here\n");
         if(Disk_QueueB[unit] == NULL)
         {
-            console("Disk Queue is empty. Saving to bottom\n");
+            if(DEBUG4 && debugflag4)
+                console("Disk Queue is empty. Saving to bottom\n");
             Disk_QueueB[unit] = &(request);
         }
         else
@@ -481,7 +471,7 @@ void disk_req(driver_proc request, int unit)
             if(last == NULL)
             {
                 request.next = Disk_QueueT[unit];
-                Disk_QueueT[unit] = &request;
+                Disk_QueueB[unit] = &request;
             }
             else
             {
@@ -496,7 +486,47 @@ void disk_req(driver_proc request, int unit)
 
     if(DEBUG4 && debugflag4)
         console("        - disk_req(): Disk request added to Disk Queue.\n");
+}
 
+
+void disk_reqII(driver_proc_ptr request, int unit)
+{
+    disk_seek(unit, request->track_start);
+
+    for(int i = 0; i < request->num_sectors; i++)
+    {
+        device_request nRequest;
+        nRequest.opr = request->operation;
+
+        nRequest.reg1 = (void *)((request->sector_start + (i)) % 16);
+        nRequest.reg2 = &(request->disk_buf[i * 512]);
+
+        nRequest.opr = request->operation;
+
+        device_output(DISK_DEV, unit, &nRequest);
+        int status;
+        waitdevice(DISK_DEV, unit, &status);
+    }
+}
+
+
+void disk_seek(int unit, int first)
+{
+    if(first >= num_tracks[unit])
+    {
+        halt(0);
+        return;
+    }
+
+    device_request request;
+    request.opr = DISK_SEEK;
+    request.reg1 = first;
+
+    device_output(DISK_DEV, unit, &request);
+    int status;
+    waitdevice(DISK_DEV, unit, &status);
+
+    arm_loc[unit] = first;
 }
 
 static int
@@ -542,6 +572,7 @@ DiskDriver(char *arg)
 
    disk_sem[unit] = semcreate_real(0);
    diskQ_sem[unit] = semcreate_real(1);
+   disk_requests[unit] = semcreate_real(0);
    Disk_QueueT[unit] = NULL;
    Disk_QueueB[unit] = NULL;
    arm_loc[unit] = 0;
@@ -576,6 +607,7 @@ DiskDriver(char *arg)
           console("        - DiskDriver(%d): waitdevice returned a non-zero value. Returning...\n");
        return 0;
    }
+
    semv_real(running);
 
    while(!is_zapped())
@@ -585,9 +617,7 @@ DiskDriver(char *arg)
        {
            break;
        }
-
        semp_real(diskQ_sem[unit]);
-
 
       if(Disk_QueueT[unit] == NULL)
        {
@@ -605,7 +635,7 @@ DiskDriver(char *arg)
        {
            Disk_QueueT[unit] = Disk_QueueT[unit]->next;
        }
-
+       disk_reqII(request, unit);
        semv_real(diskQ_sem[unit]);
        semv_real(ProcTable4[request->pid].disk_sem);
    }
