@@ -1,4 +1,3 @@
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,7 +12,7 @@
 
 /* --------------------------------GLOBALS------------------------------------*/
 
-#define debugflag4 1
+#define debugflag4 0
 
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
@@ -28,10 +27,10 @@ proc_struct ProcTable4[MAXPROC];
 proc_ptr Waiting;
 
 static int diskpids[DISK_UNITS];
-int disk_sem[DISK_UNITS];
+int diskW_sem[DISK_UNITS];
 int diskQ_sem[DISK_UNITS];
 int disk_requests[DISK_UNITS];
-unsigned int num_tracks[DISK_UNITS];
+int num_tracks[DISK_UNITS];
 int arm_loc[DISK_UNITS];
 
 /* -------------------------------PROTOTYPES----------------------------------*/
@@ -48,17 +47,13 @@ void disk_write(sysargs *args);
 int disk_write_real(int unit, int track, int first, int sectors, void *buffer);
 void disk_size(sysargs *args);
 int disk_size_real(int unit, int *sector, int *track, int *disk);
-void term_read(sysargs *args);
-int term_read_real(int unit, int size, char *buffer);
-void term_write(sysargs *args);
-int term_write_real(int unit, int size, char *text);
 
-void disk_req(driver_proc request, int unit);
+void disk_req(driver_proc_ptr request, int unit);
 void disk_reqII(driver_proc_ptr request, int unit);
 void disk_seek(int unit, int first);
 
-static void check_kernel_mode(char *caller_name);
-void setUserMode();
+static void check_kernel_mode(char* caller_name);
+void setUserMode(char* caller_name);
 
 
 int
@@ -84,10 +79,6 @@ start3(char *arg)
     sys_vec[SYS_DISKREAD]  = disk_read;
     sys_vec[SYS_DISKWRITE] = disk_write;
     sys_vec[SYS_DISKSIZE]  = disk_size;
-    //sys_vec[SYS_TERMREAD]  = term_read;
-    //sys_vec[SYS_TERMWRITE] = term_write;
-    //more for this phase's system call handlings
-
 
     /* Initialize the phase 4 process table */
 
@@ -101,29 +92,23 @@ start3(char *arg)
     }
 
 
-    /*
-     * Create clock device driver
+    /* Create clock device driver
      * I am assuming a semaphore here for coordination.  A mailbox can
-     * be used instead -- your choice.
-     */
+     * be used instead -- your choice. */
     running = semcreate_real(0);
     clockPID = fork1("Clock driver", ClockDriver, NULL, USLOSS_MIN_STACK, 2);
     if (clockPID < 0) {
         console("start3(): Can't create clock driver\n");
         halt(1);
     }
-    /*
-     * Wait for the clock driver to start. The idea is that ClockDriver
-     * will V the semaphore "running" once it is running.
-     */
+    /* Wait for the clock driver to start. The idea is that ClockDriver
+     * will V the semaphore "running" once it is running. */
 
     semp_real(running);
 
-    /*
-     * Create the disk device drivers here.  You may need to increase
+    /* Create the disk device drivers here.  You may need to increase
      * the stack size depending on the complexity of your
-     * driver, and perhaps do something with the pid returned.
-     */
+     * driver, and perhaps do something with the pid returned. */
 
     for (i = 0; i < DISK_UNITS; i++) {
         sprintf(termbuf, "%d", i);
@@ -137,27 +122,23 @@ start3(char *arg)
     semp_real(running);
     semp_real(running);
 
-    /*
-     * Create first user-level process and wait for it to finish.
+    /* Create first user-level process and wait for it to finish.
      * These are lower-case because they are not system calls;
      * system calls cannot be invoked from kernel mode.
      * I'm assuming kernel-mode versions of the system calls
-     * with lower-case names.
-     */
+     * with lower-case names. */
     pid = spawn_real("start4", start4, NULL,  8 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
     terminate_clock = 0;
-    /*
-     * Zap the device drivers
-     */
-    zap(clockPID);  // clock driver
-    join(&status); /* for the Clock Driver */
+    /* Zap the device drivers */
+    zap(clockPID);  /* clock driver */
+    join(&status);  /* for the Clock Driver */
 
     terminate_disk = 0;
     for(int i = 0; i < DISK_UNITS; i++)
     {
-        semv_real(disk_sem[i]);
+        semv_real(diskW_sem[i]);
         join(&status);
     }
 
@@ -168,7 +149,7 @@ start3(char *arg)
 void sleep(sysargs *args)
 {
     if(DEBUG4 && debugflag4)
-        console("    - sleep(): Entering the sleep function\n");
+        console("        - sleep(): Entering the sleep function\n");
     int seconds = (int)args->arg1;
     int status = sleep_real(seconds);
 
@@ -181,21 +162,21 @@ void sleep(sysargs *args)
         args->arg4 = (void *) 0;
     }
 
-    setUserMode();
+    setUserMode("sleep");
 
 }/* sleep */
 
 int sleep_real(int sec)
 {
     if(DEBUG4 && debugflag4)
-        console("    - sleep_real(): Entering the sleep_real function\n");
+        console("        - sleep_real(): Entering the sleep_real function\n");
 
     check_kernel_mode("sleep_real");
 
     if(sec < 0)
     {
         if(DEBUG4 && debugflag4)
-            console("        - sleep_real(): invalid number of seconds. returning...\n");
+            console("            - sleep_real(): invalid number of seconds. returning...\n");
         return 1;
     }
 
@@ -220,7 +201,6 @@ int sleep_real(int sec)
     {
         proc_ptr curr = Waiting;
         proc_ptr last = NULL;
-        //while(curr != NULL && curr->wake_time < wake_time)
         while(curr != NULL)
         {
             if (curr->wake_time < wake_time)
@@ -243,29 +223,30 @@ void disk_read(sysargs *args)
     int track = (int)args->arg3;
     int first = (int)args->arg4;
     int sectors = (int)args->arg2;
-    void *buffer = args->arg1;
+    void* buffer = args->arg1;
 
     long status = disk_read_real(unit, track, first, sectors, buffer);
 
     if(status == -1)
     {
         if(DEBUG4 && debugflag4)
-            console("        - disk_read(): invalid status returned. Returning...\n");
+            console("            - disk_read(): invalid status returned. Returning...\n");
         args->arg4 = (void *) -1;
         return;
     }
 
-    args->arg1 = (int)status;
+    args->arg1 = (int) status;
     args->arg4 = (void *) 0;
 
-    setUserMode();
+    setUserMode("disk_read");
 
 } /* disk_read */
 
 int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
 {
-    if(DEBUG4 && debugflag4)
-        console("    - disk_read_real(): Entering the disk_read_real function...\n");
+   if(DEBUG4 && debugflag4)
+        console("        - disk_read_real(): Entering the disk_read_real function...\n");
+
     if(unit > DISK_UNITS || track >= num_tracks[unit] || first >= DISK_TRACK_SIZE)
     {
         if(DEBUG4 && debugflag4)
@@ -284,16 +265,18 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
     request.next = NULL;
     request.pid = getpid();
 
-    disk_req(request, unit);
+    disk_req(&request, unit);
 
-    semv_real(ProcTable4[diskpids[unit]].disk_sem);
-    semp_real(ProcTable4[getpid()%MAXPROC].disk_sem);
+    if(DEBUG4 && debugflag4)
+        console("        - disk_read_real(): returned from disk_req\n");
 
-    int status;
-    device_input(DISK_DEV, unit, &status);
+    /* Allows DiskDriver to call waitdevice */
+    semv_real(diskW_sem[unit]);
 
+    /* Has current process block */
+    //semv_real(ProcTable4[diskpids[unit]].disk_sem);
+    semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     return 0;
-
 } /* disk_read_real */
 
 void disk_write(sysargs *args)
@@ -302,14 +285,13 @@ void disk_write(sysargs *args)
     int track = (int)args->arg3;
     int first = (int)args->arg4;
     int sectors = (int)args->arg2;
-    void *buffer = args->arg1;
+    void* buffer = args->arg1;
 
     int status = disk_write_real(unit, track, first, sectors, buffer);
-
     if(status == -1)
     {
         if(DEBUG4 && debugflag4)
-            console("        - disk_read(): invalid status returned. Returning...\n");
+            console("            - disk_read(): invalid status returned. Returning...\n");
         args->arg4 = (void *) -1;
         return;
     }
@@ -317,13 +299,15 @@ void disk_write(sysargs *args)
     args->arg1 = (void *) status;
     args->arg4 = (void *) 0;
 
-    setUserMode();
+    setUserMode("disk_read");
 } /* disk_write */
+
 
 int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
 {
     if(DEBUG4 && debugflag4)
-        console("    - disk_write_real(): Entering the disk_write_real function...\n");
+        console("        - disk_write_real(): Entering the disk_write_real function...\n");
+
     if(unit > DISK_UNITS || track >= num_tracks[unit] || first >= DISK_TRACK_SIZE)
     {
         if(DEBUG4 && debugflag4)
@@ -342,11 +326,16 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
     request.next = NULL;
     request.pid = getpid();
 
-    disk_req(request, unit);
+    disk_req(&request, unit);
 
     if(DEBUG4 && debugflag4)
         console("        - disk_write_real(): returned from disk_req\n");
-    semv_real(ProcTable4[diskpids[unit]].disk_sem);
+
+    /* Allows DiskDriver to call waitdevice */
+    semv_real(diskW_sem[unit]);
+
+    /* Has current process block */
+    //semv_real(ProcTable4[diskpids[unit]].disk_sem);
     semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     return 0;
 } /* disk_write_real */
@@ -354,7 +343,7 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
 void disk_size(sysargs *args)
 {
     if(DEBUG4 && debugflag4)
-        console("    - disk_size(): Entering the disk_size function...\n");
+        console("        - disk_size(): Entering the disk_size function...\n");
 
     int unit = (int)args->arg1;
     int sector, track, disk;
@@ -364,7 +353,7 @@ void disk_size(sysargs *args)
     if(status == -1)
     {
         if(DEBUG4 && debugflag4)
-            console("        - disk_size(): bad status. returning...\n");
+            console("            - disk_size(): bad status. returning...\n");
         args->arg4 = (void *) -1;
         return;
     }
@@ -374,20 +363,20 @@ void disk_size(sysargs *args)
     args->arg3 = (void *) disk;
     args->arg4 = (void *) status;
 
-    setUserMode();
+    setUserMode("disk_size");
 } /* disk_size */
 
 int disk_size_real(int unit, int *sector, int *track, int *disk)
 {
     if(DEBUG4 && debugflag4)
-        console("    - disk_size_real(): Entering the disk_size_real function...\n");
+        console("        - disk_size_real(): Entering the disk_size_real function...\n");
 
     check_kernel_mode("disk_size_real");
 
     if(unit < 0 || unit > DISK_UNITS)
     {
         if(DEBUG4 && debugflag4)
-            console("        - disk_size_real(): Invalid unit number. Returning...\n");
+            console("            - disk_size_real(): Invalid unit number. Returning...\n");
         return -1;
     }
 
@@ -399,129 +388,148 @@ int disk_size_real(int unit, int *sector, int *track, int *disk)
 
 } /* disk_size_real */
 
-void disk_req(driver_proc request, int unit)
+void disk_req(driver_proc_ptr request, int unit)
 {
     count++;
     if(DEBUG4 && debugflag4)
-        console("    - disk_req(): Entering the disk_req function...\n");
+        console("        - disk_req(): Entering the disk_req function...\n");
 
-    /* This thing keeps giving seg faults */
-    //semp_real(diskQ_sem[unit]);
-
-    if(request.track_start > arm_loc[unit] && count <= 2)
+    if(request->track_start > arm_loc[unit] && count <= 2)
     {
+        /* the if and else adds request to the queue */
         if(Disk_QueueT[unit] == NULL)
         {
             if(DEBUG4 && debugflag4)
-                console("        - disk_req(): Disk Queue is empty. Saving to top\n");
-            Disk_QueueT[unit] = &(request);
+                console("        - disk_req(): DiskQueueT[%d] is empty. Saving to head\n", unit);
+            Disk_QueueT[unit] = request;
         }
         else
         {
             if(DEBUG4 && debugflag4)
-                console("        - disk_req(): Disk Queue is not empty\n");
+                console("        - disk_req(): DiskQueueT[%d] is not empty\n", unit);
             driver_proc_ptr curr = Disk_QueueT[unit];
             driver_proc_ptr last = NULL;
 
-            while(curr != NULL && curr->track_start < request.track_start)
+            /* orders the queue list by track_start */
+            while(curr != NULL && curr->track_start < request->track_start)
             {
                 last = curr;
                 curr = curr->next;
             }
-            while(curr != NULL && curr->sector_start < request.sector_start)
+
+            /* orders the queue list by sector_start */
+            while(curr != NULL && curr->sector_start < request->sector_start)
             {
                 last = curr;
                 curr = curr->next;
             }
+
+
+            /* actually adds the request */
             if(last == NULL)
             {
-                request.next = Disk_QueueT[unit];
-                Disk_QueueT[unit] = &request;
+                request->next = Disk_QueueT[unit];
+                Disk_QueueT[unit] = request;
             }
             else
             {
-                last->next = &request;
-                request.next = curr;
+                last->next = request;
+                request->next = curr;
             }
         }
     }
     else
     {
+        /* the if and else adds request to the queue */
         if(Disk_QueueB[unit] == NULL)
         {
             if(DEBUG4 && debugflag4)
-                console("Disk Queue is empty. Saving to bottom\n");
-            Disk_QueueB[unit] = &(request);
+                console("        - disk_req(): DiskQueueB[%d] is empty. Saving to head\n", unit);
+            Disk_QueueB[unit] = request;
         }
         else
         {
+            if(DEBUG4 && debugflag4)
+                console("        - disk_req(): DiskQueueB[%d] is not empty\n", unit);
             driver_proc_ptr curr = Disk_QueueB[unit];
             driver_proc_ptr last = NULL;
 
-            while(curr != NULL && curr->track_start < request.track_start)
+            /* orders the queue list by track_start */
+            while(curr != NULL && curr->track_start < request->track_start)
             {
                 last = curr;
                 curr = curr->next;
             }
-            while(curr != NULL && curr->sector_start < request.sector_start)
+
+            /* orders the queue list by sector_start */
+            while(curr != NULL && curr->sector_start < request->sector_start)
             {
                 last = curr;
                 curr = curr->next;
             }
+
+
+            /* actually adds the request */
             if(last == NULL)
             {
-                request.next = Disk_QueueT[unit];
-                Disk_QueueB[unit] = &request;
+                request->next = Disk_QueueB[unit];
+                Disk_QueueB[unit] = request;
             }
             else
             {
-                last->next = &request;
-                request.next = curr;
+                last->next = request;
+                request->next = curr;
             }
         }
     }
-
     if(DEBUG4 && debugflag4)
         console("        - disk_req(): Disk request added to Disk Queue.\n");
 
+    /* Marks that request has entered the queue */
     semv_real(diskQ_sem[unit]);
-    semv_real(disk_sem[unit]);
-    semv_real(ProcTable4[request.pid].disk_sem);
 }
 
 
 void disk_reqII(driver_proc_ptr request, int unit)
 {
+    int status;
     if(DEBUG4 && debugflag4)
-        console("        - disk_reqII(): Entering disk_reqII...\n");
+        console("            - disk_reqII(): Entering disk_reqII...\n");
 
     disk_seek(unit, request->track_start);
-        console("        - disk_reqII(): Seek was successful.\n");
+    if(DEBUG4 && debugflag4)
+        console("            - disk_reqII(): Seek was successful.\n");
 
     for(int i = 0; i < request->num_sectors; i++)
     {
         if(DEBUG4 && debugflag4)
-            console("        - disk_reqII(): In loop proccessing request %d.\n", i + 1);
+            console("            - disk_reqII(): In loop proccessing request %d.\n", i);
+
         device_request nRequest;
+
         nRequest.opr = request->operation;
-            nRequest.reg1 = (void *)((request->sector_start + (i)) % 16);
-            nRequest.reg2 = &(request->disk_buf[i * 512]);
+        nRequest.reg1 = (void*) arm_loc[unit];
+        nRequest.reg2 = (void*) request->disk_buf;
 
         device_output(DISK_DEV, unit, &nRequest);
-        int status;
-        disk_get_status(unit, &status);
+        if(DEBUG4 && debugflag4)
+            console("            - disk_reqII(): Before waitdevice call\n", getpid());
         waitdevice(DISK_DEV, unit, &status);
+        if(DEBUG4 && debugflag4)
+            console("            - disk_reqII(): After waitdevice call\n", getpid());
     }
-}
+}/* disk_reqII */
 
 
 void disk_seek(int unit, int first)
 {
+    int status;
+
     if(DEBUG4 && debugflag4)
-        console("            - disk_seek(): Entering disk_seek...\n");
+        console("                - disk_seek(): Entering disk_seek...\n");
     if(first >= num_tracks[unit])
     {
-        console("            - disk_seek(): The entered track was invalid. Halting...\n");
+        console("                - disk_seek(): Thep entered track was invalid. Halting...\n");
         halt(0);
         return;
     }
@@ -531,57 +539,60 @@ void disk_seek(int unit, int first)
     request.reg1 = first;
 
     device_output(DISK_DEV, unit, &request);
-    int status;
-    disk_get_status(unit, &status);
+
+    if(DEBUG4 && debugflag4)
+        console("                - disk_seek(): Before waitdevice call\n", getpid());
     waitdevice(DISK_DEV, unit, &status);
+    if(DEBUG4 && debugflag4)
+        console("                - disk_seek(): After waitdevice call\n", getpid());
 
     arm_loc[unit] = first;
     if(DEBUG4 && debugflag4)
-        console("            - disk_seek(): Current arm location for disk%d: %d\n", unit, arm_loc[unit]);
+        console("                - disk_seek(): Current arm location for disk%d: %d\n", unit, arm_loc[unit]);
 }
 
-static int
-ClockDriver(char *arg)
+static int ClockDriver(char *arg)
 {
     int result;
     int status;
 
-    /*
-     * Let the parent know we are running and enable interrupts.
-     */
+    if(DEBUG4 && debugflag4)
+        console("    - ClockDriver(): Entering ClockDriver...\n");
+
+    /* Let the parent know we are running and enable interrupts */
     semv_real(running);
     psr_set(psr_get() | PSR_CURRENT_INT);
-    while(!is_zapped()) {
+    while(!is_zapped())
+    {
         result = waitdevice(CLOCK_DEV, 0, &status);
-        if (result != 0) {
-            return 0;
+        if (result != DEV_OK)
+        {
+            if(DEBUG4 && debugflag4)
+                console("    - ClockDriver(): waitdevice did not return DEV_OK\n");
+            return status;
         }
-        /*
-         * Compute the current time and wake up any processes
-         * whose time has come.
-         */
+        /* Compute the current time and wake up any processes
+         * whose time has come. */
          while(Waiting != NULL && Waiting->wake_time < sys_clock())
          {
              semv_real(Waiting->sleep_sem);
-              proc_ptr temp = Waiting->wake_up;
-              Waiting->wake_up = NULL;
-              Waiting->wake_time = -1;
-              Waiting = temp;
-
+             proc_ptr temp = Waiting->wake_up;
+             Waiting->wake_up = NULL;
+             Waiting->wake_time = -1;
+             Waiting = temp;
          }
     }
     return 0;
 }
 
-static int
-DiskDriver(char *arg)
+static int DiskDriver(char *arg)
 {
     int unit = atoi(arg);
     device_request my_request;
     int result;
     int status;
 
-    disk_sem[unit] = semcreate_real(0);
+    diskW_sem[unit] = semcreate_real(0);
     diskQ_sem[unit] = semcreate_real(1);
     disk_requests[unit] = semcreate_real(0);
     Disk_QueueT[unit] = NULL;
@@ -591,67 +602,90 @@ DiskDriver(char *arg)
     driver_proc_ptr current_req;
 
     if (DEBUG4 && debugflag4)
-        console("    - DiskDriver%d(): started\n", unit);
+        console("    - DiskDriver()[%d]: Entering DiskDriver...\n", unit);
 
 
-    /* Get the number of tracks for this disk */
+    /* Prepares the number of tracks for this disk */
     my_request.opr  = DISK_TRACKS;
     my_request.reg1 = &num_tracks[unit];
 
     result = device_output(DISK_DEV, unit, &my_request);
-    if(DEBUG4 && debugflag4)
-        console("        - DiskDriver%d(): number of tracks in unit %d: %d\n", unit, num_tracks);
 
     if (result != DEV_OK)
     {
-        console("        - DiskDriver%d(): did not get DEV_OK on DISK_TRACKS call\n", unit);
-        console("        - DiskDriver%d(): is the file disk%d present???\n", unit, unit);
+        console("    - DiskDriver()[%d]: did not get DEV_OK on DISK_TRACKS call\n", unit);
+        console("    - DiskDriver()[%d]: is the file disk%d present???\n", unit, unit);
         halt(1);
     }
 
+    /* Waits for disk input, actually checks tracks */
+    if(DEBUG4 && debugflag4)
+        console("    - DiskDriver()[%d]: number of tracks before waitdevice: %d\n", unit, num_tracks[unit]);
     waitdevice(DISK_DEV, unit, &status);
     if (DEBUG4 && debugflag4)
-        console("        - DiskDriver%d(): tracks = %d\n", unit, num_tracks[unit]);
+        console("    - DiskDriver()[%d]: number of tracks after waitdevice:%d\n", unit, num_tracks[unit]);
 
-    if(result != 0)
+    if(result != DEV_OK)
     {
         if(DEBUG4 && debugflag4)
-            console("        - DiskDriver%d(): waitdevice returned a non-zero value. Returning...\n", unit);
+            console("    - DiskDriver()[%d]: waitdevice returned a non-zero value. Returning...\n", unit);
         return 0;
     }
 
+    /* Let the parent know we are running and enable interrupts */
     semv_real(running);
 
     while(!is_zapped())
     {
-        semp_real(disk_sem[unit]);
+        if(DEBUG4 && debugflag4)
+            console("    - DiskDriver()[%d]: start of loop.\n", unit);
+
+        /* Waits for request to enter the queue */
         semp_real(diskQ_sem[unit]);
+        if(DEBUG4 && debugflag4)
+            console("    - DiskDriver()[%d]: Just passed DiskQ semaphore.\n", unit);
+
+        /* Waits for request to call waitdevice */
+        semp_real(diskW_sem[unit]);
+        if(DEBUG4 && debugflag4)
+            console("    - DiskDriver()[%d]: Just passed DiskW semaphore.\n", unit);
 
         if(terminate_disk == 0)
         {
-            console("        - DiskDriver%d(): The disk driver has stopped.\n", unit);
-            console("        - DiskDriver%d(): This should not happen\n", unit);
+            if(DEBUG4 && debugflag4)
+                console("    - DiskDriver()[%d]: Exiting DiskDriver.\n", unit);
             break;
         }
 
         if(Disk_QueueT[unit] == NULL)
         {
+            if(DEBUG4 && debugflag4)
+                console("    - DiskDriver()[%d]: DiskQueueT[%d] is empty.\n", unit, unit);
             Disk_QueueT[unit] = Disk_QueueB[unit];
             Disk_QueueB[unit] = NULL;
+            if(DEBUG4 && debugflag4)
+                console("    - DiskDriver()[%d]: DiskQueueT[%d] now equals DiskQueueB[%d]\n", unit, unit, unit);
         }
 
         driver_proc_ptr request = Disk_QueueT[unit];
 
         if(Disk_QueueT[unit] != NULL)
+        {
+            if(DEBUG4 && debugflag4)
+                console("    - DiskDriver()[%d]: Disk_QueueT[unit] set to next\n", unit, unit);
             Disk_QueueT[unit] = Disk_QueueT[unit]->next;
+        }
 
+        /* Calls disk_reqII which is where the actual calls happen */
         disk_reqII(request, unit);
         if (DEBUG4 && debugflag4)
-            console("        - DiskDriver%d(): disk_reqII successful\n", unit);
+            console("    - DiskDriver()[%d]: disk_reqII successful\n", unit);
+
+        /* Tells process it's good to continue */
         semv_real(ProcTable4[request->pid].disk_sem);
    }
    return 0;
-}
+}/* DiskDriver */
 
 /*----------------------------------------------------------------*
  * Name        : check_kernel_mode                                *
@@ -660,27 +694,24 @@ DiskDriver(char *arg)
  * Returns     : nothing                                          *
  * Side Effects: halts process if in user mode                    *
  *----------------------------------------------------------------*/
-static void check_kernel_mode(char *caller_name)
+static void check_kernel_mode(char* caller_name)
 {
     union psr_values caller_psr;                                        /* holds the current psr values */
     if (DEBUG4 && debugflag4)
-       console("    - check_kernel_mode(): called for function %s\n", caller_name);
+       console("                    - check_kernel_mode(): called for function %s\n", caller_name);
 
  /* checks if in kernel mode, halts otherwise */
     caller_psr.integer_part = psr_get();                               /* stores current psr values into structure */
     if (caller_psr.bits.cur_mode != 1)
     {
-       console("        - %s(): called while not in kernel mode, by process. Halting... -\n", caller_name);
+       console("                    - %s(): called while not in kernel mode, by process. Halting... -\n", caller_name);
        halt(1);
    }
 }/* check_kernel_mode */
 
-void setUserMode()
+void setUserMode(char* caller_name)
 {
     if(DEBUG4 && debugflag4)
-        console("    - setUserMode(): inside setUserMode\n");
+        console("                    - setUserMode(): called for function %s\n", caller_name);
     psr_set(psr_get() &~PSR_CURRENT_MODE);
-
-    if(DEBUG4 && debugflag4)
-        console("        - setUserMode(): user mode set successfully\n");
 } /* setUserMode */
