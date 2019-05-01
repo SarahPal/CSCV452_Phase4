@@ -18,7 +18,6 @@
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
 int terminate_clock;
-int count;
 
 static struct driver_proc Driver_Table[MAXPROC];
 driver_proc_ptr Disk_QueueT[DISK_UNITS];
@@ -199,7 +198,7 @@ int sleep_real(int sec)
             Waiting = &(ProcTable4[pid]);
         }
     }
-    else        /* Can we actually get here? */
+    else        /* Can we actually get here? Actually who cares... */
     {
         proc_ptr curr = Waiting;
         proc_ptr last = NULL;
@@ -274,15 +273,13 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
 
     for (int i = 0; i < request.num_sectors; i++)
     {
+        /* Allows DiskDriver to call waitdevice */
         semv_real(diskW_sem[unit]);
+
         /* Has current process block */
-        //semv_real(ProcTable4[diskPID[unit]].disk_sem);
         semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     }
-
-    /* CURRENT WORKING ERROR */
-    /*if (request.num_sectors > 0)
-        semv_real(diskW_sem[unit]);*/
+        semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     return 0;
 } /* disk_read_real */
 
@@ -338,18 +335,19 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
     if (DEBUG4 && debugflag4)
         console("        - disk_write_real(): returned from disk_req\n");
 
-    /* Allows DiskDriver to call waitdevice */
+
     for (int i = 0; i < request.num_sectors; i++)
     {
+        /* Allows DiskDriver to call waitdevice */
         semv_real(diskW_sem[unit]);
+
         /* Has current process block */
-        //semv_real(ProcTable4[diskPID[unit]].disk_sem);
         semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     }
 
-    /* CURRENT WORKING ERROR */
-    /*if (request.num_sectors > 0)
-        semv_real(diskW_sem[unit]);*/
+    /* Has current process block */
+    semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
+
     return 0;
 } /* disk_write_real */
 
@@ -403,98 +401,91 @@ int disk_size_real(int unit, int *sector, int *track, int *disk)
 
 void disk_req(driver_proc_ptr request, int unit)
 {
-    count++;
     if (DEBUG4 && debugflag4)
         console("        - disk_req(): Entering the disk_req function...\n");
 
-    if (request->track_start > arm_loc[unit] && count <= 2)
+    /* handles the queue if it's empty */
+    if (Disk_QueueT[unit] == NULL)
     {
-        /* the if and else adds request to the queue */
-        if (Disk_QueueT[unit] == NULL)
-        {
-            if (DEBUG4 && debugflag4)
-                console("        - disk_req(): DiskQueueT[%d] is empty. Saving to head\n", unit);
-            Disk_QueueT[unit] = request;
-        }
-        else
-        {
-            if (DEBUG4 && debugflag4)
-                console("        - disk_req(): DiskQueueT[%d] is not empty\n", unit);
-            driver_proc_ptr curr = Disk_QueueT[unit];
-            driver_proc_ptr last = NULL;
-
-            /* orders the queue list by track_start */
-            while(curr != NULL && curr->track_start < request->track_start)
-            {
-                last = curr;
-                curr = curr->next;
-            }
-
-            /* orders the queue list by sector_start */
-            while(curr != NULL && curr->sector_start < request->sector_start)
-            {
-                last = curr;
-                curr = curr->next;
-            }
-
-
-            /* actually adds the request */
-            if (last == NULL)
-            {
-                request->next = Disk_QueueT[unit];
-                Disk_QueueT[unit] = request;
-            }
-            else
-            {
-                last->next = request;
-                request->next = curr;
-            }
-        }
+        if (DEBUG4 && debugflag4)
+            console("        - disk_req(): All Queues are empty, adding to DiskQueueT[%d] as head\n", unit);
+        Disk_QueueT[unit] = request;
     }
+
     else
     {
-        /* the if and else adds request to the queue */
-        if (Disk_QueueB[unit] == NULL)
+        if (DEBUG4 && debugflag4)
+            console("        - disk_req(): Adding to DiskQueueT[%d]\n", unit);
+
+        driver_proc_ptr curr = Disk_QueueT[unit];
+        driver_proc_ptr prev = curr;
+
+        /* handles adding to Disk_QueueT */
+        if (request->track_start > arm_loc[unit] && request->track_start >= curr->track_start)
         {
-            if (DEBUG4 && debugflag4)
-                console("        - disk_req(): DiskQueueB[%d] is empty. Saving to head\n", unit);
-            Disk_QueueB[unit] = request;
+            /* orders Disk_QueueT by track_start */
+
+            while(curr->next != NULL && request->track_start >= curr->track_start)
+            {
+                prev = curr;
+                curr = curr->next;
+            }
+            /* checks final iteration */
+            if (request->track_start >= curr->track_start)
+                prev = curr;
+
+            /* actually adds the request */
+            request->next = prev->next;
+            prev->next = request;
         }
+
+        /* handles adding to Disk_QueueB */
         else
         {
             if (DEBUG4 && debugflag4)
-                console("        - disk_req(): DiskQueueB[%d] is not empty\n", unit);
-            driver_proc_ptr curr = Disk_QueueB[unit];
-            driver_proc_ptr last = NULL;
+                console("        - disk_req(): Adding to DiskQueueB[%d]\n", unit);
 
-            /* orders the queue list by track_start */
-            while(curr != NULL && curr->track_start < request->track_start)
+            if (Disk_QueueB[unit] == NULL)
             {
-                last = curr;
-                curr = curr->next;
-            }
-
-            /* orders the queue list by sector_start */
-            while(curr != NULL && curr->sector_start < request->sector_start)
-            {
-                last = curr;
-                curr = curr->next;
-            }
-
-
-            /* actually adds the request */
-            if (last == NULL)
-            {
-                request->next = Disk_QueueB[unit];
+                if (DEBUG4 && debugflag4)
+                    console("        - disk_req(): DiskQueueB[%d] is empty. Saving to head\n", unit);
                 Disk_QueueB[unit] = request;
             }
             else
             {
-                last->next = request;
-                request->next = curr;
+                driver_proc_ptr curr = Disk_QueueB[unit];
+                driver_proc_ptr prev = curr;
+
+                if (DEBUG4 && debugflag4)
+                    console("        - disk_req(): DiskQueueB[%d] is not empty\n", unit);
+
+                /* orders Disk_QueueT by track_start */
+                if(request->track_start < curr->track_start)
+                {
+                    Disk_QueueB[unit] = request;
+                    request->next = curr;
+                }
+
+                else
+                {
+                    while(curr->next != NULL && request->track_start > curr->track_start)
+                    {
+                        prev = curr;
+                        curr = curr->next;
+                    }
+                    /* checks final iteration */
+                    if (request->track_start >= curr->track_start)
+                        prev = curr;
+
+                    /* actually adds the request */
+                    request->next = prev->next;
+                    prev->next = request;
+                }
             }
+
         }
     }
+
     if (DEBUG4 && debugflag4)
         console("        - disk_req(): Disk request added to Disk Queue.\n");
 
@@ -516,9 +507,11 @@ void disk_reqII(driver_proc_ptr request, int unit)
         return;
     }
 
+    if (DEBUG4 && debugflag4)
+        console("            - disk_reqII(): Calling disk_seek.\n");
     disk_seek(unit, request->track_start);
     if (DEBUG4 && debugflag4)
-        console("            - disk_reqII(): Seek was successful.\n");
+        console("            - disk_reqII(): disk_seek was successful.\n");
 
     for (int i = 0; i < request->num_sectors; i++)
     {
@@ -696,6 +689,14 @@ static int DiskDriver(char *arg)
 
         driver_proc_ptr request = Disk_QueueT[unit];
 
+        if (request != NULL)
+        {
+            /* Calls disk_reqII which is where the actual calls happen */
+            disk_reqII(request, unit);
+            if (DEBUG4 && debugflag4)
+                console("    - DiskDriver()[%d]: disk_reqII successful\n", unit);
+        }
+
         if (Disk_QueueT[unit] != NULL)
         {
             if (DEBUG4 && debugflag4)
@@ -705,23 +706,16 @@ static int DiskDriver(char *arg)
 
         if (request != NULL)
         {
-            /* Calls disk_reqII which is where the actual calls happen */
-            disk_reqII(request, unit);
-            if (DEBUG4 && debugflag4)
-                console("    - DiskDriver()[%d]: disk_reqII successful\n", unit);
+            /* Tells requesting process it's good to go */
+            semv_real(ProcTable4[request->pid].disk_sem);
         }
+
    }while(!is_zapped());
 
    return 0;
 }/* DiskDriver */
 
-/*----------------------------------------------------------------*
- * Name        : check_kernel_mode                                *
- * Purpose     : Checks the current kernel mode.                  *
- * Parameters  : name of calling function                         *
- * Returns     : nothing                                          *
- * Side Effects: halts process if in user mode                    *
- *----------------------------------------------------------------*/
+
 static void check_kernel_mode(char* caller_name)
 {
     union psr_values caller_psr;                                        /* holds the current psr values */
@@ -736,6 +730,7 @@ static void check_kernel_mode(char* caller_name)
        halt(1);
    }
 }/* check_kernel_mode */
+
 
 void setUserMode(char* caller_name)
 {
