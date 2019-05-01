@@ -1,10 +1,10 @@
 #define DEBUG4 1
 
-#define CHECKMODE {						\
-	if (psr_get() & PSR_CURRENT_MODE) { 				\
+#define CHECKMODE {						                    \
+	if (psr_get() & PSR_CURRENT_MODE) { 				    \
 	    console("Trying to invoke syscall from kernel\n");	\
-	    halt(1);						\
-	}							\
+	    halt(1);						                    \
+	}							                            \
 }
 
 
@@ -19,17 +19,17 @@ struct driver_proc {
    int   wake_time;    /* for sleep syscall */
    int   been_zapped;
 
-
    /* Used for disk requests */
    int   operation;    /* DISK_READ, DISK_WRITE, DISK_SEEK, DISK_TRACKS */
    int   track_start;
    int   sector_start;
    int   num_sectors;
-   void *disk_buf;
+   void* disk_buf;
 
    driver_proc_ptr next;
 
    //more fields to add
+   int   pid;
 
 };
 
