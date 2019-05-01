@@ -38,7 +38,6 @@ int arm_loc[DISK_UNITS];
 static int	ClockDriver(char *);
 static int	DiskDriver(char *);
 
-
 void sleep(sysargs *args);
 int sleep_real(int sec);
 void disk_read(sysargs *args);
@@ -56,8 +55,7 @@ static void check_kernel_mode(char* caller_name);
 void setUserMode(char* caller_name);
 
 
-int
-start3(char *arg)
+int start3(char *arg)
 {
     char	name[128];
     char    termbuf[10];
@@ -147,10 +145,12 @@ start3(char *arg)
     return 0;
 }
 
+
 void sleep(sysargs *args)
 {
     if (DEBUG4 && debugflag4)
         console("        - sleep(): Entering the sleep function\n");
+
     int seconds = (int)args->arg1;
     int status = sleep_real(seconds);
 
@@ -166,6 +166,7 @@ void sleep(sysargs *args)
     setUserMode("sleep");
 
 }/* sleep */
+
 
 int sleep_real(int sec)
 {
@@ -189,9 +190,7 @@ int sleep_real(int sec)
     if (Waiting == NULL || Waiting->wake_time > wake_time)
     {
         if (Waiting == NULL)
-        {
             Waiting = &(ProcTable4[pid]);
-        }
         else
         {
             ProcTable4[pid].wake_up = Waiting;
@@ -218,6 +217,7 @@ int sleep_real(int sec)
     return 0;
 } /* sleep_real */
 
+
 void disk_read(sysargs *args)
 {
     int unit = (int)args->arg5;
@@ -242,6 +242,7 @@ void disk_read(sysargs *args)
     setUserMode("disk_read");
 
 } /* disk_read */
+
 
 int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
 {
@@ -279,9 +280,11 @@ int disk_read_real(int unit, int track, int first, int sectors, void *buffer)
         /* Has current process block */
         semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     }
+
         semp_real(ProcTable4[getpid() % MAXPROC].disk_sem);
     return 0;
 } /* disk_read_real */
+
 
 void disk_write(sysargs *args)
 {
@@ -351,6 +354,7 @@ int disk_write_real(int unit, int track, int first, int sectors, void *buffer)
     return 0;
 } /* disk_write_real */
 
+
 void disk_size(sysargs *args)
 {
     if (DEBUG4 && debugflag4)
@@ -377,6 +381,7 @@ void disk_size(sysargs *args)
     setUserMode("disk_size");
 } /* disk_size */
 
+
 int disk_size_real(int unit, int *sector, int *track, int *disk)
 {
     if (DEBUG4 && debugflag4)
@@ -398,6 +403,7 @@ int disk_size_real(int unit, int *sector, int *track, int *disk)
     return 0;
 
 } /* disk_size_real */
+
 
 void disk_req(driver_proc_ptr request, int unit)
 {
@@ -570,6 +576,7 @@ void disk_seek(int unit, int first)
         console("                - disk_seek(): Current arm location for disk%d: %d\n", unit, arm_loc[unit]);
 }
 
+
 static int ClockDriver(char *arg)
 {
     int result;
@@ -604,6 +611,7 @@ static int ClockDriver(char *arg)
     }
     return 0;
 }
+
 
 static int DiskDriver(char *arg)
 {
