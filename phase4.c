@@ -13,7 +13,7 @@
 
 /* --------------------------------GLOBALS------------------------------------*/
 
-#define debugflag4 0
+#define debugflag4 1
 
 static int running; /*semaphore to synchronize drivers and start3*/
 int terminate_disk;
@@ -72,11 +72,10 @@ start3(char *arg)
     int		status;
 
 
-    int terminate_disk = 1;
-    int terminate_clock = 1;
+    terminate_disk = 1;
+    terminate_clock = 1;
     /*
      * Check kernel mode here.
-
      */
      check_kernel_mode("start3");
 
@@ -388,7 +387,7 @@ int disk_size_real(int unit, int *sector, int *track, int *disk)
     if(unit < 0 || unit > DISK_UNITS)
     {
         if(DEBUG4 && debugflag4)
-            console("       - disk_size_real(): Invalid unit number. Returning...\n");
+            console("        - disk_size_real(): Invalid unit number. Returning...\n");
         return -1;
     }
 
@@ -406,21 +405,19 @@ void disk_req(driver_proc request, int unit)
     if(DEBUG4 && debugflag4)
         console("    - disk_req(): Entering the disk_req function...\n");
 
-
-    semp_real(diskQ_sem[unit]);
-
+    /* This thing keeps giving seg faults */
+    //semp_real(diskQ_sem[unit]);
 
     if(request.track_start > arm_loc[unit] && count <= 2)
     {
         if(Disk_QueueT[unit] == NULL)
         {
             if(DEBUG4 && debugflag4)
-                //console("        - disk_req(): Disk Queue is empty. Saving to top\n");
+                console("        - disk_req(): Disk Queue is empty. Saving to top\n");
             Disk_QueueT[unit] = &(request);
         }
         else
         {
-            //console("message2: %s\n", Disk_QueueT[unit]->disk_buf);
             if(DEBUG4 && debugflag4)
                 console("        - disk_req(): Disk Queue is not empty\n");
             driver_proc_ptr curr = Disk_QueueT[unit];
@@ -483,31 +480,36 @@ void disk_req(driver_proc request, int unit)
             }
         }
     }
-    semv_real(diskQ_sem[unit]);
-    semv_real(disk_sem[unit]);
-    semv_real(ProcTable4[request.pid].disk_sem);
 
     if(DEBUG4 && debugflag4)
         console("        - disk_req(): Disk request added to Disk Queue.\n");
+
+    semv_real(diskQ_sem[unit]);
+    semv_real(disk_sem[unit]);
+    semv_real(ProcTable4[request.pid].disk_sem);
 }
 
 
 void disk_reqII(driver_proc_ptr request, int unit)
 {
+    if(DEBUG4 && debugflag4)
+        console("        - disk_reqII(): Entering disk_reqII...\n");
+
     disk_seek(unit, request->track_start);
+        console("        - disk_reqII(): Seek was successful.\n");
 
     for(int i = 0; i < request->num_sectors; i++)
     {
+        if(DEBUG4 && debugflag4)
+            console("        - disk_reqII(): In loop proccessing request %d.\n", i + 1);
         device_request nRequest;
         nRequest.opr = request->operation;
-
-        nRequest.reg1 = (void *)((request->sector_start + (i)) % 16);
-        nRequest.reg2 = &(request->disk_buf[i * 512]);
-
-        nRequest.opr = request->operation;
+            nRequest.reg1 = (void *)((request->sector_start + (i)) % 16);
+            nRequest.reg2 = &(request->disk_buf[i * 512]);
 
         device_output(DISK_DEV, unit, &nRequest);
         int status;
+        disk_get_status(unit, &status);
         waitdevice(DISK_DEV, unit, &status);
     }
 }
@@ -515,8 +517,11 @@ void disk_reqII(driver_proc_ptr request, int unit)
 
 void disk_seek(int unit, int first)
 {
+    if(DEBUG4 && debugflag4)
+        console("            - disk_seek(): Entering disk_seek...\n");
     if(first >= num_tracks[unit])
     {
+        console("            - disk_seek(): The entered track was invalid. Halting...\n");
         halt(0);
         return;
     }
@@ -527,9 +532,12 @@ void disk_seek(int unit, int first)
 
     device_output(DISK_DEV, unit, &request);
     int status;
+    disk_get_status(unit, &status);
     waitdevice(DISK_DEV, unit, &status);
 
     arm_loc[unit] = first;
+    if(DEBUG4 && debugflag4)
+        console("            - disk_seek(): Current arm location for disk%d: %d\n", unit, arm_loc[unit]);
 }
 
 static int
@@ -568,79 +576,79 @@ ClockDriver(char *arg)
 static int
 DiskDriver(char *arg)
 {
-   int unit = atoi(arg);
-   device_request my_request;
-   int result;
-   int status;
+    int unit = atoi(arg);
+    device_request my_request;
+    int result;
+    int status;
 
-   disk_sem[unit] = semcreate_real(0);
-   diskQ_sem[unit] = semcreate_real(1);
-   disk_requests[unit] = semcreate_real(0);
-   Disk_QueueT[unit] = NULL;
-   Disk_QueueB[unit] = NULL;
-   arm_loc[unit] = 0;
+    disk_sem[unit] = semcreate_real(0);
+    diskQ_sem[unit] = semcreate_real(1);
+    disk_requests[unit] = semcreate_real(0);
+    Disk_QueueT[unit] = NULL;
+    Disk_QueueB[unit] = NULL;
+    arm_loc[unit] = 0;
 
-   driver_proc_ptr current_req;
+    driver_proc_ptr current_req;
 
-   if (DEBUG4 && debugflag4)
-      console("    - DiskDriver(%d): started\n", unit);
+    if (DEBUG4 && debugflag4)
+        console("    - DiskDriver%d(): started\n", unit);
 
 
-   /* Get the number of tracks for this disk */
-   my_request.opr  = DISK_TRACKS;
-   my_request.reg1 = &num_tracks[unit];
+    /* Get the number of tracks for this disk */
+    my_request.opr  = DISK_TRACKS;
+    my_request.reg1 = &num_tracks[unit];
 
-   result = device_output(DISK_DEV, unit, &my_request);
-   if(DEBUG4 && debugflag4)
-        console("        - DiskDriver(): number of tracks in unit %d: %d\n", unit, num_tracks);
+    result = device_output(DISK_DEV, unit, &my_request);
+    if(DEBUG4 && debugflag4)
+        console("        - DiskDriver%d(): number of tracks in unit %d: %d\n", unit, num_tracks);
 
-   if (result != DEV_OK) {
-      console("        - DiskDriver %d: did not get DEV_OK on DISK_TRACKS call\n", unit);
-      console("        - DiskDriver %d: is the file disk%d present???\n", unit, unit);
-      halt(1);
-   }
+    if (result != DEV_OK)
+    {
+        console("        - DiskDriver%d(): did not get DEV_OK on DISK_TRACKS call\n", unit);
+        console("        - DiskDriver%d(): is the file disk%d present???\n", unit, unit);
+        halt(1);
+    }
 
-   waitdevice(DISK_DEV, unit, &status);
-   if (DEBUG4 && debugflag4)
-      console("        - DiskDriver(%d): tracks = %d\n", unit, num_tracks[unit]);
+    waitdevice(DISK_DEV, unit, &status);
+    if (DEBUG4 && debugflag4)
+        console("        - DiskDriver%d(): tracks = %d\n", unit, num_tracks[unit]);
 
-   if(result != 0)
-   {
-       if(DEBUG4 && debugflag4)
-          console("        - DiskDriver(%d): waitdevice returned a non-zero value. Returning...\n");
-       return 0;
-   }
+    if(result != 0)
+    {
+        if(DEBUG4 && debugflag4)
+            console("        - DiskDriver%d(): waitdevice returned a non-zero value. Returning...\n", unit);
+        return 0;
+    }
 
-   semv_real(running);
+    semv_real(running);
 
-   while(!is_zapped())
-   {
-       semp_real(disk_sem[unit]);
-       if(terminate_disk == 0)
-       {
-           break;
-       }
-       semp_real(diskQ_sem[unit]);
+    while(!is_zapped())
+    {
+        semp_real(disk_sem[unit]);
+        semp_real(diskQ_sem[unit]);
 
-      if(Disk_QueueT[unit] == NULL)
-       {
-           Disk_QueueT[unit] = Disk_QueueB[unit];
-           Disk_QueueB[unit] = NULL;
-       }
+        if(terminate_disk == 0)
+        {
+            console("        - DiskDriver%d(): The disk driver has stopped.\n", unit);
+            console("        - DiskDriver%d(): This should not happen\n", unit);
+            break;
+        }
 
-       driver_proc_ptr request = Disk_QueueT[unit];
+        if(Disk_QueueT[unit] == NULL)
+        {
+            Disk_QueueT[unit] = Disk_QueueB[unit];
+            Disk_QueueB[unit] = NULL;
+        }
 
-       if(Disk_QueueT[unit]->next == NULL)
-       {
-           Disk_QueueT[unit] = NULL;
-       }
-       else
-       {
-           Disk_QueueT[unit] = Disk_QueueT[unit]->next;
-       }
-       disk_reqII(request, unit);
-       semv_real(diskQ_sem[unit]);
-       semv_real(ProcTable4[request->pid].disk_sem);
+        driver_proc_ptr request = Disk_QueueT[unit];
+
+        if(Disk_QueueT[unit] != NULL)
+            Disk_QueueT[unit] = Disk_QueueT[unit]->next;
+
+        disk_reqII(request, unit);
+        if (DEBUG4 && debugflag4)
+            console("        - DiskDriver%d(): disk_reqII successful\n", unit);
+        semv_real(ProcTable4[request->pid].disk_sem);
    }
    return 0;
 }
